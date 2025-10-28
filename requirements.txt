@@ -3,3 +3,4 @@ matplotlib
 numpy
 pandas
 scikit-learn
+flask-cors==6.0.1
