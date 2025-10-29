@@ -1,5 +1,5 @@
 services:
-  - type: web
+  type: web
   name: random-forest-api
   env: python
   buildCommand: "pip install -r requirements.txt"
