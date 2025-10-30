@@ -2,7 +2,7 @@ import pickle
 from flask import Flask, jsonify, request
 import numpy as np
 from models.rf_nuestro import RandomForest 
-from flask import request
+from flask import request, jsonify
 
 app = Flask(__name__)
 
@@ -35,6 +35,8 @@ def predict():
             }), 400
             
         values = data['features']
+        X = np.array([values])
+
         if not isinstance(values, list) or not all(isinstance(x, (int, float)) for x in values):
             return jsonify({
                 "error": "The request expected a list of numbers (features)."
@@ -45,7 +47,6 @@ def predict():
                 "error": "Input values out of range, expected values in range (0-10)."
             }), 422  
             
-        X = np.array([values])
         prediction = model.predict(X)
         print(prediction[0])
         label = labels[prediction[0]]
@@ -55,7 +56,6 @@ def predict():
             "error": f"An error occurred: {str(e)}"
         }), 500
 
-from flask import jsonify
 
 @app.route('/info', methods=['GET'])
 def info():
@@ -98,5 +98,5 @@ def info():
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=10000, debug=True)
+    app.run(debug=True)
     
