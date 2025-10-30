@@ -55,3 +55,11 @@ class RandomForest:
   def fit_predict(self, X, y):
     self.fit(X, y)
     return self.predict(X)
+
+  def get_params(self):
+      return {
+          "n_estimators": self.n_estimators,
+          "max_depth": self.max_depth,
+          "max_features": self.max_features,
+          "random_state": self.random_state
+      }
