@@ -10,6 +10,8 @@ class RandomForest:
     self.n_estimators = n_estimators
     self.max_depth = max_depth
     self.max_features = max_features
+    self.max_depth_num = None
+    self.max_features_num = None
     self.random_state = random_state
     self.trees = []
 
@@ -59,7 +61,7 @@ class RandomForest:
   def get_params(self):
       return {
           "n_estimators": self.n_estimators,
-          "max_depth": self.max_depth,
-          "max_features": self.max_features,
+          "max_depth": self.max_depth_num,
+          "max_features": self.max_features_num,
           "random_state": self.random_state
       }
