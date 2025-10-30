@@ -1,102 +1,127 @@
+from models.rf_nuestro import RandomForest 
+import queue
+import threading
 import pickle
 from flask import Flask, jsonify, request
 import numpy as np
-from models.rf_nuestro import RandomForest 
-from flask import request, jsonify
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from threading import Semaphore, Lock
+
+MAX_CONCURRENT_REQUESTS = 10
+MAX_QUEUE_SIZE = 50
+MAX_WORKERS = 8
 
 app = Flask(__name__)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    default_limits=["100 per minute"]
+)
+
+semaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
+task_queue = queue.Queue(MAX_QUEUE_SIZE)
+model_lock = Lock()
 
 with open("./models/modelo.pkl", "rb") as f:
     model = pickle.load(f)
 
+def predict_threadsafe(features):
+    with model_lock:
+        return model.predict(features)
+
+def get_model_params():
+    if model is None:
+        raise ValueError("The model is not valid")
+    params = model.get_params()
+    if not isinstance(params, dict):
+        raise TypeError("get_params() didn't return a valid dictionary")
+    return {
+        "team": "Feliz Navidad",
+        "model": type(model).__name__,
+        "n_estimators": params.get("n_estimators", "unknown"),
+        "max_depth": params.get("max_depth", "unknown"),
+        "random_state": params.get("random_state", "unknown")
+    }
+
+def worker():
+    while True:
+        try:
+            func, args, kwargs, result_queue = task_queue.get()
+            with semaphore:
+                try:
+                    result = func(*args, **kwargs)
+                    result_queue.put(result)
+                except Exception as e:
+                    result_queue.put(e)
+                finally:
+                    task_queue.task_done()
+        except Exception:
+            continue
+
+for _ in range(MAX_WORKERS):
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+
 @app.route('/health')
+@limiter.limit("50 per minute")
 def health():
-    return jsonify({'status': 'ok'}), 200
+    return jsonify({
+        "status": "ok",
+    }), 200
 
 @app.route('/predict', methods=['POST'])
+@limiter.limit("50 per minute")
 def predict():
-    labels = {
-        0: 'Setosa',
-        1: 'Versicolor',
-        2: 'Virginica'
-    }
-    
-    try: 
+    labels = {0: 'Setosa', 1: 'Versicolor', 2: 'Virginica'}
+    try:
         data = request.get_json()
-        
-        if data is None:
-            return jsonify({
-                "error": "Bad Request, Expected a valid JSON."
-            }), 400
-        
-        if "features" not in data:
-            return jsonify({
-                "error": "Missing key 'features' in the JSON."
-            }), 400
-            
-        values = data['features']
-        X = np.array([values])
+        if not data or "features" not in data:
+            return jsonify({"error": "Invalid JSON, expected key 'features'"}), 400
 
+        values = data["features"]
         if not isinstance(values, list) or not all(isinstance(x, (int, float)) for x in values):
-            return jsonify({
-                "error": "The request expected a list of numbers (features)."
-            }), 400
-        
+            return jsonify({"error": "Expected a list of numeric values"}), 400
+
+        X = np.array([values])
         if np.any(X < 0) or np.any(X > 10):
-            return jsonify({
-                "error": "Input values out of range, expected values in range (0-10)."
-            }), 422  
-            
-        prediction = model.predict(X)
-        print(prediction[0])
+            return jsonify({"error": "Values out of range (0–10)"}), 422
+
+        result_queue = queue.Queue()
+        task_queue.put((predict_threadsafe, (X,), {}, result_queue))
+        try:
+            prediction = result_queue.get(timeout=10)
+        except queue.Empty:
+            return jsonify({"error": "Server busy, try again later"}), 503
+
+        if isinstance(prediction, Exception):
+            raise prediction
+
         label = labels[prediction[0]]
         return jsonify({"prediction": label})
-    except Exception as e:
-        return jsonify({
-            "error": f"An error occurred: {str(e)}"
-        }), 500
 
+    except Exception as e:
+        return jsonify({"error": f"Internal error: {str(e)}"}), 500
 
 @app.route('/info', methods=['GET'])
+@limiter.limit("50 per minute")
 def info():
+    result_queue = queue.Queue()
     try:
-        if model is None:
-            return jsonify({
-                "status": "error",
-                "message": "The model is not valid"
-            }), 500
+        task_queue.put_nowait((get_model_params, (), {}, result_queue))
+    except queue.Full:
+        return jsonify({"status": "error", "message": "Server busy, please try again later"}), 503
 
-        try:
-            params = model.get_params()
-        except Exception as e:
-            return jsonify({
-                "status": "error",
-                "message": f"Can not obtain model params: {str(e)}"
-            }), 500
+    try:
+        result = result_queue.get(timeout=10)
+    except queue.Empty:
+        return jsonify({"status": "error", "message": "Server busy, please try again later"}), 503
 
-        if not isinstance(params, dict):
-            return jsonify({
-                "status": "error",
-                "message": "get_params() didnt return a valid dictionary."
-            }), 500
+    if isinstance(result, Exception):
+        return jsonify({"status": "error", "message": f"Internal error: {str(result)}"}), 500
 
-        info = {
-            "team": "Feliz Navidad",
-            "model": type(model).__name__,
-            "n_estimators": params.get("n_estimators", "unknown"),
-            "max_depth": params.get("max_depth", "unkwnown"),
-            "random_state": params.get("random_state", "unkwnown")
-        }
-
-        return jsonify(info), 200
-
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": f"An error occurred: {str(e)}"
-        }), 500
-
+    return jsonify(result), 200
 
 if __name__ == '__main__':
-    app.run(debug=True)
-    
+    app.run(debug=True, threaded=True)
